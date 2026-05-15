@@ -93,9 +93,11 @@ def train_dqn_agent(
         if loss is not None:
             loss_window.append(loss)
 
-        # Update target network periodically
+        # Update target network: soft (Polyak) every step, or hard every N steps
         agent.total_steps = step + 1
-        if (step + 1) % config.target_update_freq == 0:
+        if config.soft_update_tau > 0:
+            agent.soft_update_target_network(config.soft_update_tau)
+        elif (step + 1) % config.target_update_freq == 0:
             agent.update_target_network()
 
         # Episode bookkeeping

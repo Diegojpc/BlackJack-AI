@@ -148,7 +148,7 @@ class DQNAgent:
 
         # Optimizer
         self.optimizer = optim.Adam(self.online_net.parameters(), lr=self.config.learning_rate)
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = nn.SmoothL1Loss()  # Huber loss — more robust to noisy TD targets
 
         # Experience Replay
         self.replay_buffer = ReplayBuffer(self.config.replay_buffer_size)
@@ -259,7 +259,7 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         # Gradient clipping for stability
-        torch.nn.utils.clip_grad_norm_(self.online_net.parameters(), max_norm=10.0)
+        torch.nn.utils.clip_grad_norm_(self.online_net.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         loss_val = loss.item()
@@ -270,7 +270,16 @@ class DQNAgent:
     def update_target_network(self) -> None:
         """Hard copy online network weights to target network."""
         self.target_net.load_state_dict(self.online_net.state_dict())
-        logger.debug("Target network updated at step %d", self.total_steps)
+        logger.debug("Target network hard-updated at step %d", self.total_steps)
+
+    def soft_update_target_network(self, tau: float) -> None:
+        """Polyak-average online weights into target: θ_target ← τ·θ_online + (1-τ)·θ_target."""
+        for target_param, online_param in zip(
+            self.target_net.parameters(), self.online_net.parameters()
+        ):
+            target_param.data.copy_(
+                tau * online_param.data + (1.0 - tau) * target_param.data
+            )
 
     def get_policy(self) -> dict[tuple[int, int, bool], int]:
         """Extract greedy policy for all standard Blackjack states."""

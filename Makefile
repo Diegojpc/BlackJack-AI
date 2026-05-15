@@ -31,7 +31,7 @@ train-ql:
 train-tabular: train-mc train-sarsa train-ql
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Training — Phase 2: Deep RL
+# Training — Phase 2: Deep RL (improved: Huber loss, soft updates, wider nets)
 # ──────────────────────────────────────────────────────────────────────────────
 train-dqn:
 	uv run python -m src.training.train_deep --agent dqn --timesteps 1000000
@@ -48,7 +48,21 @@ train-deep: train-dqn train-ddqn train-dueling
 # Training — Phase 3: PPO Card Counting
 # ──────────────────────────────────────────────────────────────────────────────
 train-ppo:
-	uv run python -m src.training.train_ppo --timesteps 10000000
+	uv run python -m src.training.train_ppo --timesteps 20000000 --decks 1
+
+# Extended run — 30M steps to push card-counting strategy deeper
+train-ppo-long:
+	uv run python -m src.training.train_ppo --timesteps 30000000 --decks 1
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Training — Phase 4: Curriculum (Double Down + Split + Surrender)
+# Best expected value — recommended for maximum performance
+# ──────────────────────────────────────────────────────────────────────────────
+train-curriculum:
+	uv run python -m src.training.curriculum --timesteps 20000000 --decks 1
+
+train-curriculum-long:
+	uv run python -m src.training.curriculum --timesteps 50000000 --decks 1
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Training — All Phases
@@ -60,6 +74,18 @@ train-all: train-tabular train-deep train-ppo
 # ──────────────────────────────────────────────────────────────────────────────
 eval-basic:
 	uv run python -c "from src.evaluation.evaluator import evaluate_basic_strategy; r = evaluate_basic_strategy(100_000); print(r.summary())"
+
+compare:
+	uv run python -m src.evaluation.compare_all
+
+play:
+	uv run python -m src.evaluation.play --agent dueling_dqn --hands 20
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Interactive Advisor App (for real games with friends)
+# ──────────────────────────────────────────────────────────────────────────────
+app:
+	uv run streamlit run app.py
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Quick Smoke Test (fast training for CI/CD)

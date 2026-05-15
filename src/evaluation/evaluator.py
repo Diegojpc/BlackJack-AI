@@ -101,14 +101,18 @@ def evaluate_agent(
         done = False
         episode_reward = 0.0
         player_busted = False
+        steps_in_episode = 0
+        # Initial player sum — used to detect naturals when sab=True pays 1.0
+        initial_player_sum = state[0] if isinstance(state, tuple) else int(state[0] * 31)
 
         while not done:
             action = agent.get_action(state, greedy=True)
             next_state, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
             done = terminated or truncated
+            steps_in_episode += 1
 
-            # Detect bust: if player hit and the game ended with negative reward
+            # Detect bust: player hit and game ended with negative reward
             if action == 1 and done and reward < 0:
                 player_busted = True
 
@@ -118,7 +122,9 @@ def evaluate_agent(
 
         if episode_reward > 0:
             wins += 1
-            if episode_reward == 1.5:
+            # Natural BJ: hand started at 21, ended in one action, won
+            # Works for both sab=True (pays 1.0) and sab=False (pays 1.5)
+            if initial_player_sum == 21 and steps_in_episode == 1:
                 natural_bjs += 1
         elif episode_reward < 0:
             losses += 1

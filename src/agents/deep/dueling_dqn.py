@@ -136,7 +136,7 @@ class DuelingDQNAgent(DQNAgent):
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.online_net.parameters(), lr=self.config.learning_rate)
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = nn.SmoothL1Loss()  # Huber loss — more robust to noisy TD targets
 
         self.replay_buffer = ReplayBuffer(self.config.replay_buffer_size)
 

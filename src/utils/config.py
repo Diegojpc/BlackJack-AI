@@ -117,28 +117,29 @@ class DQNConfig:
     """Hyperparameters for DQN, Double DQN, and Dueling DQN agents."""
 
     # Network architecture
-    hidden_dims: list[int] = field(default_factory=lambda: [64, 64])
+    hidden_dims: list[int] = field(default_factory=lambda: [128, 128])
     input_dim: int = 3  # (player_sum, dealer_card, usable_ace)
     output_dim: int = 2  # Hit, Stand
 
     # Training
     total_timesteps: int = 1_000_000
     eval_episodes: int = 100_000
-    batch_size: int = 64
-    learning_rate: float = 1e-3
+    batch_size: int = 128
+    learning_rate: float = 5e-4
     discount_factor: float = 1.0
 
     # Experience Replay
     replay_buffer_size: int = 100_000
     min_replay_size: int = 1_000  # Minimum transitions before training starts
 
-    # Target Network
-    target_update_freq: int = 1_000  # Hard update target network every N steps
+    # Target Network — use soft updates (Polyak) when tau > 0, hard updates otherwise
+    target_update_freq: int = 1_000  # Hard update frequency (ignored when soft updates are on)
+    soft_update_tau: float = 0.005   # τ=0 disables soft updates, τ=1 is equivalent to hard copy
 
     # Exploration
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay_steps: int = 500_000
+    epsilon_decay_steps: int = 700_000  # Slower decay → more thorough exploration
 
     # Device
     device: str = "auto"  # "auto", "cpu", or "cuda"
@@ -169,18 +170,18 @@ class PPOConfig:
     eval_episodes: int = 100_000
 
     # PPO-specific
-    learning_rate: float = 3e-4
-    n_steps: int = 2048  # Steps per rollout
-    batch_size: int = 64
+    learning_rate: float = 1e-4   # Lower LR → more stable policy updates
+    n_steps: int = 4096           # Larger rollout → better return estimates for episodic task
+    batch_size: int = 128
     n_epochs: int = 10  # Optimization epochs per rollout
     gamma: float = 1.0  # Episodic, no discounting
     clip_range: float = 0.2  # PPO clipping threshold
-    ent_coef: float = 0.01  # Entropy bonus for exploration
+    ent_coef: float = 0.005  # Reduced entropy coef — agent is mostly converged on basic play
     vf_coef: float = 0.5  # Value function loss coefficient
     max_grad_norm: float = 0.5  # Gradient clipping
 
-    # Network
-    net_arch: list[int] = field(default_factory=lambda: [256, 256])
+    # Network — deeper arch to capture card-count correlations across 13-dim state
+    net_arch: list[int] = field(default_factory=lambda: [256, 256, 128])
 
     # Device
     device: str = "auto"
