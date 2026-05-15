@@ -24,49 +24,58 @@ from src.utils.config import DQNConfig, MODELS_DIR
 
 # ─── Card helpers ─────────────────────────────────────────────────────────────
 
-CARD_LABELS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+ROW1 = ["A", "2", "3", "4", "5", "6", "7"]
+ROW2 = ["8", "9", "10", "J", "Q", "K"]
+
 LABEL_TO_VALUE = {
-    "A": 1, "2": 2, "3": 3, "4": 4, "5": 5,
-    "6": 6, "7": 7, "8": 8, "9": 9,
-    "10": 10, "J": 10, "Q": 10, "K": 10,
+    "A": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7,
+    "8": 8, "9": 9, "10": 10, "J": 10, "Q": 10, "K": 10,
 }
-VALUE_TO_LABEL = {v: k for k, v in LABEL_TO_VALUE.items() if k not in ("J", "Q", "K")}
-VALUE_TO_LABEL[10] = "10"
-VALUE_TO_LABEL[1] = "A"
+VALUE_TO_SHORT = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6",
+                  7: "7", 8: "8", 9: "9", 10: "10"}
 
 
-def hand_value(cards: list[int]) -> tuple[int, bool]:
-    """Return (total, usable_ace). Ace is 11 when it doesn't bust."""
+def _hand_value(cards: list[int]) -> tuple[int, bool]:
     total = sum(cards)
-    usable_ace = 1 in cards and total + 10 <= 21
-    return total + (10 if usable_ace else 0), usable_ace
+    soft = 1 in cards and total + 10 <= 21
+    return total + (10 if soft else 0), soft
 
 
-def cards_display(cards: list[int]) -> str:
-    return "  +  ".join(VALUE_TO_LABEL.get(c, str(c)) for c in cards)
+def _hi_lo(cards: list[int]) -> int:
+    return sum(1 if 2 <= c <= 6 else -1 if c in (1, 10) else 0 for c in cards)
 
 
-def hi_lo_count(cards: list[int]) -> int:
-    """Hi-Lo running count: 2–6 = +1, 7–9 = 0, 10/A = –1."""
-    total = 0
-    for c in cards:
-        if 2 <= c <= 6:
-            total += 1
-        elif c == 10 or c == 1:
-            total -= 1
-    return total
+def _readable(cards: list[int]) -> str:
+    return " + ".join(VALUE_TO_SHORT.get(c, str(c)) for c in cards)
+
+
+def _tips(cards: list[int], player_sum: int, dealer: int) -> list[str]:
+    tips: list[str] = []
+    if len(cards) == 2:
+        c1, c2 = cards
+        if c1 == c2 == 1:
+            tips.append("✂️ **Always Split Aces** — each hand restarts with a powerful Ace.")
+        elif c1 == c2 == 8:
+            tips.append("✂️ **Always Split 8s** — hard 16 is the worst hand; two 8s gives better odds.")
+        elif c1 == c2 == 10:
+            tips.append("🚫 **Never Split 10s** — a 20 is one of the strongest hands.")
+        if player_sum == 11:
+            tips.append("⬆️ **Consider Doubling Down** — 11 is your best doubling opportunity.")
+        elif player_sum == 10 and dealer <= 9:
+            tips.append(f"⬆️ **Consider Doubling Down** — 10 vs dealer {VALUE_TO_SHORT.get(dealer, dealer)} is strong.")
+        elif player_sum == 9 and 3 <= dealer <= 6:
+            tips.append("⬆️ **Consider Doubling Down** — 9 vs weak dealer (3–6) is a marginal double.")
+    if player_sum == 16 and dealer in (9, 10, 1) and len(cards) == 2:
+        tips.append("🏳️ **Consider Surrender** — hard 16 vs 9/10/A saves half your bet if the table allows it.")
+    if player_sum == 15 and dealer == 10 and len(cards) == 2:
+        tips.append("🏳️ **Consider Surrender** — hard 15 vs dealer 10 is the other classic spot.")
+    return tips
 
 
 # ─── Model loading ────────────────────────────────────────────────────────────
 
 @st.cache_resource(show_spinner="Loading AI model…")
-def load_agent() -> DuelingDQNAgent | None:
-    """
-    Load the best available Dueling DQN checkpoint.
-
-    Reads the saved config from the checkpoint so the network architecture
-    matches exactly, regardless of current DQNConfig defaults.
-    """
+def _load_agent() -> DuelingDQNAgent | None:
     candidates = [
         MODELS_DIR / "dueling_dqn_final.pt",
         *sorted(MODELS_DIR.glob("dueling_dqn_step*.pt"), reverse=True),
@@ -87,299 +96,297 @@ def load_agent() -> DuelingDQNAgent | None:
     return None
 
 
-# ─── Strategy engine ──────────────────────────────────────────────────────────
-
-def get_recommendation(
-    agent: DuelingDQNAgent,
-    player_cards: list[int],
-    dealer_value: int,
-) -> tuple[str, str, list[str]]:
-    """
-    Return (action, confidence_label, tips).
-
-    action: "HIT" | "STAND" | "BUST" | "BLACKJACK"
-    confidence_label: "High" | "Medium" | "Close call" | ""
-    tips: list of contextual advice strings
-    """
-    player_sum, usable_ace = hand_value(player_cards)
-
-    if player_sum > 21:
-        return "BUST", "", []
-    if player_sum == 21 and len(player_cards) == 2:
-        return "BLACKJACK", "High", ["Natural Blackjack! You win 1.5x unless dealer also has 21."]
-    if player_sum == 21:
-        return "STAND", "High", ["You have 21 — always stand."]
-
-    state = (player_sum, dealer_value, usable_ace)
-    action_int = agent.get_action(state, greedy=True)
-
-    # Q-value margin → confidence
-    obs = torch.FloatTensor([
-        player_sum / 31.0,
-        dealer_value / 10.0,
-        float(usable_ace),
-    ]).unsqueeze(0).to(agent.device)
+def _predict(agent: DuelingDQNAgent, player_sum: int, dealer_card: int, usable_ace: bool) -> tuple[str, str]:
+    obs = torch.FloatTensor([player_sum / 31.0, dealer_card / 10.0, float(usable_ace)]).unsqueeze(0).to(agent.device)
     with torch.no_grad():
         q = agent.online_net(obs).cpu().numpy()[0]
     margin = abs(float(q[1] - q[0]))
-
-    confidence = "High" if margin > 0.25 else "Medium" if margin > 0.08 else "Close call"
-    action_label = "HIT" if action_int == 1 else "STAND"
-    tips = _build_tips(player_cards, player_sum, dealer_value, usable_ace)
-    return action_label, confidence, tips
-
-
-def _build_tips(
-    cards: list[int], player_sum: int, dealer: int, usable_ace: bool
-) -> list[str]:
-    tips = []
-    if len(cards) == 2:
-        c1, c2 = cards
-        # Pair advice
-        if c1 == c2:
-            if c1 == 1:
-                tips.append("✂️ **Always Split Aces** — each hand restarts with a powerful Ace.")
-            elif c1 == 8:
-                tips.append("✂️ **Always Split 8s** — a hard 16 is the worst hand; 8+8→two 8s is much better.")
-            elif c1 == 10:
-                tips.append("🚫 **Never Split 10s** — 20 is one of the strongest hands; don't give it up.")
-            elif c1 in (4, 5):
-                tips.append(f"🚫 **Don't Split {c1}s** — treat this as a {'8' if c1==4 else '10'} and hit/double.")
-        # Double Down opportunities
-        if player_sum == 11:
-            tips.append("⬆️ **Consider Doubling Down** — 11 vs any dealer card is your best doubling spot.")
-        elif player_sum == 10 and dealer <= 9:
-            tips.append(f"⬆️ **Consider Doubling Down** — 10 vs dealer {VALUE_TO_LABEL.get(dealer, dealer)} is a strong double.")
-        elif player_sum == 9 and 3 <= dealer <= 6:
-            tips.append(f"⬆️ **Consider Doubling Down** — 9 vs dealer {VALUE_TO_LABEL.get(dealer, dealer)} (weak) is a marginal double.")
-    # Surrender hint
-    if player_sum == 16 and dealer in (9, 10, 1) and len(cards) == 2:
-        tips.append("🏳️ **Consider Surrender** (if allowed) — hard 16 vs 9/10/A is the classic surrender spot.")
-    if player_sum == 15 and dealer == 10 and len(cards) == 2:
-        tips.append("🏳️ **Consider Surrender** (if allowed) — hard 15 vs dealer 10 saves you half your bet.")
-    return tips
+    return (
+        "HIT" if int(np.argmax(q)) == 1 else "STAND",
+        "High" if margin > 0.25 else "Medium" if margin > 0.08 else "Close call",
+    )
 
 
-# ─── Session state init ───────────────────────────────────────────────────────
+# ─── Session state ────────────────────────────────────────────────────────────
 
-def init_state() -> None:
-    defaults = {
+def _init() -> None:
+    defaults: dict = {
         "player_cards": [],
         "dealer_value": None,
         "s_wins": 0,
         "s_losses": 0,
         "s_draws": 0,
-        "cards_seen": [],  # across completed hands, for running count
+        "cards_seen": [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 
+def _record_and_reset(outcome: str) -> None:
+    seen = list(st.session_state.player_cards)
+    if st.session_state.dealer_value:
+        seen.append(st.session_state.dealer_value)
+    st.session_state.cards_seen.extend(seen)
+    if outcome == "win":
+        st.session_state.s_wins += 1
+    elif outcome == "loss":
+        st.session_state.s_losses += 1
+    else:
+        st.session_state.s_draws += 1
+    st.session_state.player_cards = []
+    st.session_state.dealer_value = None
+    st.rerun()
+
+
+# ─── Reusable card-button grid ────────────────────────────────────────────────
+
+def _card_grid(prefix: str, highlight_value: int | None = None) -> str | None:
+    clicked: str | None = None
+    for row in (ROW1, ROW2):
+        cols = st.columns(len(row))
+        for i, lbl in enumerate(row):
+            val = LABEL_TO_VALUE[lbl]
+            is_selected = highlight_value is not None and val == highlight_value and lbl == VALUE_TO_SHORT.get(val, lbl)
+            btn_type = "primary" if is_selected else "secondary"
+            if cols[i].button(lbl, key=f"{prefix}_{lbl}", use_container_width=True, type=btn_type):
+                clicked = lbl
+    return clicked
+
+
+# ─── CSS ──────────────────────────────────────────────────────────────────────
+
+CSS = """
+<style>
+button[data-testid="baseButton-secondary"],
+button[data-testid="baseButton-primary"] {
+    font-size: 1.1em !important;
+    font-weight: 700 !important;
+    padding: 0.45rem 0.1rem !important;
+    border-radius: 8px !important;
+}
+
+.abox {
+    text-align: center;
+    padding: 1.4rem 1rem;
+    border-radius: 16px;
+    font-size: 2.8em;
+    font-weight: 900;
+    letter-spacing: 3px;
+    margin: 0.5rem 0 0.3rem 0;
+}
+.hit       { background: #e63946; color: #fff; }
+.stand     { background: #2dc653; color: #fff; }
+.bust      { background: #6c757d; color: #fff; }
+.blackjack { background: #f4c430; color: #1a1a1a; }
+
+.card-box {
+    display: inline-block;
+    font-size: 1.6em;
+    font-weight: 900;
+    border: 3px solid currentColor;
+    border-radius: 10px;
+    padding: 0.2rem 0.6rem;
+    min-width: 2.5rem;
+    text-align: center;
+}
+.section-label {
+    font-size: 0.85em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin: 0.8rem 0 0.3rem 0;
+}
+</style>
+"""
+
+
 # ─── App ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     st.set_page_config(
-        page_title="Blackjack AI Advisor",
+        page_title="Blackjack AI",
         page_icon="🃏",
         layout="centered",
         initial_sidebar_state="collapsed",
     )
+    st.markdown(CSS, unsafe_allow_html=True)
+    _init()
 
-    st.markdown("""
-    <style>
-    /* Large card buttons */
-    div[data-testid="column"] > div > div > div > button {
-        font-size: 1.15em !important;
-        font-weight: bold !important;
-        padding: 0.4rem 0.1rem !important;
-    }
-    /* Action box */
-    .action-box {
-        text-align: center;
-        padding: 1.2rem;
-        border-radius: 14px;
-        font-size: 2.6em;
-        font-weight: 900;
-        letter-spacing: 2px;
-        margin: 0.6rem 0;
-    }
-    .action-hit        { background: #ff4b4b; color: #fff; }
-    .action-stand      { background: #21c354; color: #fff; }
-    .action-bust       { background: #808495; color: #fff; }
-    .action-blackjack  { background: #ffd700; color: #1a1a1a; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    init_state()
-
-    st.title("🃏 Blackjack AI Advisor")
-    st.caption("Powered by a Dueling DQN trained to 98% basic-strategy accuracy")
-
-    # ── Load model ─────────────────────────────────────────────────────────────
-    agent = load_agent()
+    agent = _load_agent()
     if agent is None:
         st.error(
             "No trained model found in `models/`. "
-            "Run `make train-dueling` to train one first (takes ~30 min on CPU)."
+            "Run `make train-dueling` to train one (takes ~30 min on CPU)."
         )
         st.stop()
 
-    # ── YOUR HAND ──────────────────────────────────────────────────────────────
-    st.subheader("Your Hand")
-    st.caption("Tap a card each time you receive one")
+    st.title("🃏 Blackjack AI")
+    st.caption("Dueling DQN · 98% basic-strategy accuracy")
 
-    cols = st.columns(len(CARD_LABELS))
-    for i, label in enumerate(CARD_LABELS):
-        if cols[i].button(label, key=f"p_{label}"):
-            st.session_state.player_cards.append(LABEL_TO_VALUE[label])
-            st.rerun()
+    # ── YOUR CARDS ─────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">Your cards — tap each card you receive</p>',
+                unsafe_allow_html=True)
 
-    if st.session_state.player_cards:
-        total, soft = hand_value(st.session_state.player_cards)
+    clicked_player = _card_grid("p")
+    if clicked_player:
+        st.session_state.player_cards.append(LABEL_TO_VALUE[clicked_player])
+        st.rerun()
+
+    pc = st.session_state.player_cards
+    if pc:
+        total, soft = _hand_value(pc)
         hand_type = "Soft" if soft else "Hard"
-        st.markdown(
-            f"### {total} ({hand_type})"
-            f"<span style='font-size:0.9em; color:gray;'> — {cards_display(st.session_state.player_cards)}</span>",
-            unsafe_allow_html=True,
-        )
-        if st.button("↩ Remove last card", key="undo"):
-            st.session_state.player_cards.pop()
-            st.rerun()
+        col_sum, col_undo = st.columns([3, 1])
+        with col_sum:
+            cards_html = "  ".join(
+                f'<span class="card-box">{VALUE_TO_SHORT.get(c, c)}</span>' for c in pc
+            )
+            st.markdown(
+                f"<div style='margin:0.4rem 0'>{cards_html}</div>"
+                f"<div style='font-size:1.5em; font-weight:700; margin-top:0.2rem'>"
+                f"  {total} <span style='font-size:0.65em; color:#888'>({hand_type})</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with col_undo:
+            st.markdown("<div style='margin-top:0.8rem'></div>", unsafe_allow_html=True)
+            if st.button("↩ Undo", use_container_width=True):
+                pc.pop()
+                st.rerun()
     else:
-        st.markdown("*No cards yet — tap above to add*")
+        st.markdown("<p style='color:#aaa; margin:0.5rem 0'>No cards yet</p>",
+                    unsafe_allow_html=True)
 
-    # ── DEALER'S UP CARD ───────────────────────────────────────────────────────
-    st.subheader("Dealer's Up Card")
-    dealer_choice = st.selectbox(
-        "Dealer showing",
-        ["— select —"] + CARD_LABELS,
-        label_visibility="collapsed",
-        key="dealer_select",
-    )
-    if dealer_choice != "— select —":
-        st.session_state.dealer_value = LABEL_TO_VALUE[dealer_choice]
-    else:
-        st.session_state.dealer_value = None
-
-    # ── AI RECOMMENDATION ──────────────────────────────────────────────────────
     st.divider()
 
-    player_ready = bool(st.session_state.player_cards)
-    dealer_ready = st.session_state.dealer_value is not None
+    # ── DEALER'S CARD ──────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">Dealer\'s face-up card — tap to select</p>',
+                unsafe_allow_html=True)
 
-    if player_ready and dealer_ready:
-        action, confidence, tips = get_recommendation(
-            agent,
-            st.session_state.player_cards,
-            st.session_state.dealer_value,
-        )
+    dv = st.session_state.dealer_value
+    clicked_dealer = _card_grid("d", highlight_value=dv)
+    if clicked_dealer:
+        st.session_state.dealer_value = LABEL_TO_VALUE[clicked_dealer]
+        st.rerun()
 
-        emoji_map = {"HIT": "🎯", "STAND": "✋", "BUST": "💀", "BLACKJACK": "⭐"}
-        css_map = {"HIT": "action-hit", "STAND": "action-stand",
-                   "BUST": "action-bust", "BLACKJACK": "action-blackjack"}
-
-        st.markdown(
-            f'<div class="action-box {css_map[action]}">'
-            f'{action} {emoji_map.get(action, "")}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        if confidence:
-            icons = {"High": "🟢", "Medium": "🟡", "Close call": "🔴"}
-            st.caption(f"{icons.get(confidence, '')} Confidence: **{confidence}**")
-
-        for tip in tips:
-            st.info(tip)
-
-    elif player_ready:
-        st.info("Select the dealer's card to get a recommendation")
-    elif dealer_ready:
-        st.info("Add your cards to get a recommendation")
-    else:
-        st.markdown("*Add your cards and the dealer's card above*")
-
-    # ── HI-LO CARD COUNT ───────────────────────────────────────────────────────
-    with st.expander("📊 Running Card Count (Hi-Lo)", expanded=False):
-        visible = list(st.session_state.player_cards)
-        if st.session_state.dealer_value:
-            visible.append(st.session_state.dealer_value)
-        count = hi_lo_count(st.session_state.cards_seen + visible)
-        sign = "+" if count > 0 else ""
-
-        if count > 2:
-            st.success(f"Count: **{sign}{count}** — High count: more 10s/Aces left → player advantage 🎉")
-        elif count < -2:
-            st.warning(f"Count: **{count}** — Low count: more small cards left → dealer advantage ⚠️")
-        else:
-            st.info(f"Count: **{sign}{count}** — Roughly neutral shoe")
-
-        st.caption("2–6 = **+1** &nbsp;&nbsp; 7–9 = **0** &nbsp;&nbsp; 10/J/Q/K/A = **−1**")
-
-        if abs(count) > 3:
-            bet_tip = "Bet more than your usual amount" if count > 3 else "Bet your minimum"
-            st.caption(f"💰 Betting tip: {bet_tip} (count = {sign}{count})")
-
-    # ── HAND CONTROLS ──────────────────────────────────────────────────────────
-    st.divider()
-    col_result, col_new = st.columns([3, 1])
-
-    with col_result:
-        result_options = ["Record outcome…", "Win ✅", "Loss ❌", "Draw / Push 🤝"]
-        result = st.selectbox(
-            "Outcome",
-            result_options,
-            label_visibility="collapsed",
-            key="outcome_select",
-        )
-        if result != result_options[0]:
-            if st.button("Save & next hand", type="primary"):
-                # Archive cards for running count
-                hand_cards = list(st.session_state.player_cards)
-                if st.session_state.dealer_value:
-                    hand_cards.append(st.session_state.dealer_value)
-                st.session_state.cards_seen.extend(hand_cards)
-
-                if "Win" in result:
-                    st.session_state.s_wins += 1
-                elif "Loss" in result:
-                    st.session_state.s_losses += 1
-                else:
-                    st.session_state.s_draws += 1
-
-                st.session_state.player_cards = []
+    if dv:
+        label = VALUE_TO_SHORT.get(dv, str(dv))
+        col_card, col_clear = st.columns([3, 1])
+        with col_card:
+            st.markdown(
+                f"<div style='margin:0.4rem 0'>"
+                f"<span class='card-box' style='color:#1f77b4'>{label}</span>"
+                f"  <span style='color:#888; font-size:0.9em'>Dealer shows</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with col_clear:
+            st.markdown("<div style='margin-top:0.3rem'></div>", unsafe_allow_html=True)
+            if st.button("✕ Clear", use_container_width=True):
                 st.session_state.dealer_value = None
                 st.rerun()
+    else:
+        st.markdown("<p style='color:#aaa; margin:0.4rem 0'>No card selected</p>",
+                    unsafe_allow_html=True)
 
-    with col_new:
-        if st.button("🔄 New hand", use_container_width=True):
-            st.session_state.player_cards = []
-            st.session_state.dealer_value = None
-            st.rerun()
+    st.divider()
+
+    # ── AI RECOMMENDATION ──────────────────────────────────────────────────────
+    dv = st.session_state.dealer_value
+
+    if pc and dv:
+        total, soft = _hand_value(pc)
+
+        if total > 21:
+            st.markdown('<div class="abox bust">BUST 💀</div>', unsafe_allow_html=True)
+
+        elif total == 21 and len(pc) == 2:
+            st.markdown('<div class="abox blackjack">BLACKJACK ⭐</div>', unsafe_allow_html=True)
+            st.success("Natural 21 — you win 1.5× your bet unless dealer also has blackjack.")
+
+        else:
+            action, confidence = _predict(agent, total, dv, soft)
+            css = "hit" if action == "HIT" else "stand"
+            icon = "🎯" if action == "HIT" else "✋"
+            st.markdown(f'<div class="abox {css}">{action}  {icon}</div>', unsafe_allow_html=True)
+
+            conf_icon = {"High": "🟢", "Medium": "🟡", "Close call": "🔴"}[confidence]
+            st.caption(f"{conf_icon} **{confidence}** confidence")
+
+            for tip in _tips(pc, total, dv):
+                st.info(tip)
+
+    else:
+        missing = []
+        if not pc:
+            missing.append("your cards")
+        if not dv:
+            missing.append("dealer's card")
+        st.markdown(
+            f"<p style='color:#aaa; text-align:center; font-size:1.1em; margin:1rem 0'>"
+            f"Add {' and '.join(missing)} to get a recommendation</p>",
+            unsafe_allow_html=True,
+        )
+
+    # ── CARD COUNT ─────────────────────────────────────────────────────────────
+    all_cards = st.session_state.cards_seen + pc + ([dv] if dv else [])
+    count = _hi_lo(all_cards)
+    sign = "+" if count > 0 else ""
+    if count > 2:
+        count_color, count_msg = "#2dc653", "Deck favors the player"
+    elif count < -2:
+        count_color, count_msg = "#e63946", "Deck favors the dealer"
+    else:
+        count_color, count_msg = "#888", "Neutral shoe"
+    st.markdown(
+        f"<div style='text-align:center; margin:0.6rem 0; font-size:0.9em; color:{count_color}'>"
+        f"  Hi-Lo count: <strong>{sign}{count}</strong>  ·  {count_msg}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    # ── OUTCOME ────────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">What happened?</p>', unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    if c1.button("✅  WIN", use_container_width=True, key="btn_win"):
+        _record_and_reset("win")
+    if c2.button("❌  LOSS", use_container_width=True, key="btn_loss"):
+        _record_and_reset("loss")
+    if c3.button("🤝  DRAW", use_container_width=True, key="btn_draw"):
+        _record_and_reset("draw")
+
+    if st.button("🔄  New hand  (don't record)", use_container_width=True):
+        st.session_state.player_cards = []
+        st.session_state.dealer_value = None
+        st.rerun()
 
     # ── SESSION STATS ──────────────────────────────────────────────────────────
     w = st.session_state.s_wins
     l = st.session_state.s_losses
     d = st.session_state.s_draws
-    total = w + l + d
+    total_hands = w + l + d
 
-    if total > 0:
+    if total_hands > 0:
         st.divider()
-        st.subheader("Session Stats")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Hands", total)
-        c2.metric("Wins", w, delta=f"{w / total * 100:.0f}%")
+        c1.metric("Hands", total_hands)
+        c2.metric("Wins", w, f"{w / total_hands * 100:.0f}%")
         c3.metric("Losses", l)
         c4.metric("Draws", d)
-        net = w - l
-        sign = "+" if net >= 0 else ""
-        st.caption(f"Net (assuming $1/hand): **{sign}{net}** units")
-        if st.button("Reset session stats"):
-            st.session_state.s_wins = 0
-            st.session_state.s_losses = 0
-            st.session_state.s_draws = 0
-            st.session_state.cards_seen = []
+        net_units = w - l
+        sign2 = "+" if net_units >= 0 else ""
+        st.caption(
+            f"Net: **{sign2}{net_units}** units  ·  "
+            f"Bet hint: {'bet more 💰' if count > 3 else 'bet minimum 🛑' if count < -3 else 'normal bet'}"
+        )
+        if st.button("Reset session", key="reset"):
+            for k in ("s_wins", "s_losses", "s_draws", "cards_seen"):
+                st.session_state[k] = [] if k == "cards_seen" else 0
             st.rerun()
 
 
