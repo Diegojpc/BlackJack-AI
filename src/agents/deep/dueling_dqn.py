@@ -25,7 +25,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from src.agents.deep.dqn import DQNAgent, ReplayBuffer
-from src.utils.config import DQNConfig
+from src.utils.config import DQNConfig, resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +117,7 @@ class DuelingDQNAgent(DQNAgent):
         self.config = config or DQNConfig()
         self._name = "Dueling DQN"
 
-        if self.config.device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(self.config.device)
+        self.device = torch.device(resolve_device(self.config.device))
 
         # Dueling networks instead of standard QNetwork
         self.online_net = DuelingQNetwork(

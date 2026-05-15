@@ -7,6 +7,7 @@ as dataclasses for type safety and IDE autocompletion.
 
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,51 @@ LOGS_DIR = PROJECT_ROOT / "results" / "logs"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=1)
+def resolve_device(preference: str = "auto") -> str:
+    """
+    Resolve the actual usable device, testing CUDA before trusting it.
+
+    torch.cuda.is_available() returns True even when the GPU's compute
+    capability is unsupported (e.g., GTX 1050 Ti SM 6.1 on PyTorch 2.12+).
+    This helper runs a real tensor operation to verify CUDA actually works.
+
+    Args:
+        preference: "auto", "cpu", or "cuda".
+
+    Returns:
+        "cuda" if GPU works, "cpu" otherwise.
+    """
+    if preference == "cpu":
+        return "cpu"
+
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            logger.info("CUDA not available. Using CPU.")
+            return "cpu"
+
+        # Actually test a tensor op — this is where SM 6.1 GPUs crash
+        test_tensor = torch.zeros(1, device="cuda")
+        _ = test_tensor + 1
+        del test_tensor
+        torch.cuda.empty_cache()
+
+        gpu_name = torch.cuda.get_device_name(0)
+        logger.info("CUDA verified working. Using GPU: %s", gpu_name)
+        return "cuda"
+
+    except Exception as e:
+        logger.warning(
+            "CUDA reported available but failed verification: %s. "
+            "Falling back to CPU. This is normal for older GPUs "
+            "(GTX 1050 Ti, etc.) with PyTorch 2.12+.",
+            e,
+        )
+        return "cpu"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

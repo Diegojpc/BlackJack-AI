@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from src.utils.config import DQNConfig
+from src.utils.config import DQNConfig, resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +126,8 @@ class DQNAgent:
         self.config = config or DQNConfig()
         self._name = "DQN"
 
-        # Resolve device
-        if self.config.device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(self.config.device)
+        # Resolve device — validates CUDA actually works before using it
+        self.device = torch.device(resolve_device(self.config.device))
 
         # Networks
         self.online_net = QNetwork(

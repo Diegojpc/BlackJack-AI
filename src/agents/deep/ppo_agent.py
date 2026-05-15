@@ -21,7 +21,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.env_util import make_vec_env
 
-from src.utils.config import PPOConfig
+from src.utils.config import PPOConfig, resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +54,8 @@ class PPOBlackjackAgent:
         self._name = "PPO"
         self.env_id = env_id
 
-        # Resolve device
-        device = self.config.device
-        if device == "auto":
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Resolve device — validates CUDA before using it
+        device = resolve_device(self.config.device)
 
         # Create environment
         self.env = make_vec_env(env_id, n_envs=1, env_kwargs=env_kwargs or {})
