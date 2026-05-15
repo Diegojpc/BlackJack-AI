@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project artifacts
+models/*.pkl
+models/*.zip
+models/*.pt
+results/logs/
+results/*.csv
+results/*.png
+results/*.svg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# TensorBoard
+runs/
+
+# UV
+uv.lock

@@ -1,0 +1,174 @@
+"""
+Centralized configuration system for Blackjack AI.
+
+All hyperparameters, environment settings, and training configs are defined here
+as dataclasses for type safety and IDE autocompletion.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Project Paths
+# ──────────────────────────────────────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+MODELS_DIR = PROJECT_ROOT / "models"
+RESULTS_DIR = PROJECT_ROOT / "results"
+LOGS_DIR = PROJECT_ROOT / "results" / "logs"
+
+# Ensure directories exist at import time
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tabular RL Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class TabularConfig:
+    """Hyperparameters for tabular RL agents (Monte Carlo, SARSA, Q-Learning)."""
+
+    # Training
+    num_episodes: int = 500_000
+    eval_episodes: int = 100_000
+
+    # Exploration
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.01
+    epsilon_decay_episodes: int = 400_000
+
+    # Learning
+    learning_rate: float = 0.01  # α — step size for TD updates
+    discount_factor: float = 1.0  # γ — episodic task, no discounting needed
+
+    # Environment
+    use_natural_blackjack: bool = True  # +1.5 reward for natural BJ
+    use_sab: bool = True  # Sutton & Barto ruleset alignment
+
+    # Logging
+    log_interval: int = 10_000  # Log metrics every N episodes
+    checkpoint_interval: int = 100_000  # Save Q-table every N episodes
+
+    def get_epsilon(self, episode: int) -> float:
+        """Calculate decaying epsilon for a given episode number."""
+        return max(
+            self.epsilon_end,
+            self.epsilon_start
+            - (self.epsilon_start - self.epsilon_end)
+            * (episode / self.epsilon_decay_episodes),
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Deep RL Configuration (DQN variants)
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class DQNConfig:
+    """Hyperparameters for DQN, Double DQN, and Dueling DQN agents."""
+
+    # Network architecture
+    hidden_dims: list[int] = field(default_factory=lambda: [64, 64])
+    input_dim: int = 3  # (player_sum, dealer_card, usable_ace)
+    output_dim: int = 2  # Hit, Stand
+
+    # Training
+    total_timesteps: int = 1_000_000
+    eval_episodes: int = 100_000
+    batch_size: int = 64
+    learning_rate: float = 1e-3
+    discount_factor: float = 1.0
+
+    # Experience Replay
+    replay_buffer_size: int = 100_000
+    min_replay_size: int = 1_000  # Minimum transitions before training starts
+
+    # Target Network
+    target_update_freq: int = 1_000  # Hard update target network every N steps
+
+    # Exploration
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.01
+    epsilon_decay_steps: int = 500_000
+
+    # Device
+    device: str = "auto"  # "auto", "cpu", or "cuda"
+
+    # Logging
+    log_interval: int = 10_000
+    checkpoint_interval: int = 100_000
+
+    def get_epsilon(self, step: int) -> float:
+        """Calculate decaying epsilon for a given timestep."""
+        return max(
+            self.epsilon_end,
+            self.epsilon_start
+            - (self.epsilon_start - self.epsilon_end)
+            * (step / self.epsilon_decay_steps),
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PPO Configuration (Stable-Baselines3)
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class PPOConfig:
+    """Hyperparameters for PPO agent via Stable-Baselines3."""
+
+    # Training
+    total_timesteps: int = 10_000_000
+    eval_episodes: int = 100_000
+
+    # PPO-specific
+    learning_rate: float = 3e-4
+    n_steps: int = 2048  # Steps per rollout
+    batch_size: int = 64
+    n_epochs: int = 10  # Optimization epochs per rollout
+    gamma: float = 1.0  # Episodic, no discounting
+    clip_range: float = 0.2  # PPO clipping threshold
+    ent_coef: float = 0.01  # Entropy bonus for exploration
+    vf_coef: float = 0.5  # Value function loss coefficient
+    max_grad_norm: float = 0.5  # Gradient clipping
+
+    # Network
+    net_arch: list[int] = field(default_factory=lambda: [256, 256])
+
+    # Device
+    device: str = "auto"
+
+    # Logging
+    log_interval: int = 10
+    eval_freq: int = 100_000
+    checkpoint_interval: int = 500_000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Finite Deck Environment Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class FiniteDeckConfig:
+    """Configuration for the custom finite-deck Blackjack environment."""
+
+    num_decks: int = 1
+    penetration: float = 0.75  # Reshuffle when 75% of shoe is dealt
+    natural_bonus: float = 1.5  # Reward multiplier for natural Blackjack
+    surrender_penalty: float = -0.5  # Reward for surrender action
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Curriculum Learning Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class CurriculumConfig:
+    """Configuration for phased curriculum learning."""
+
+    # Phase boundaries (cumulative timesteps)
+    phase1_end: int = 2_000_000  # Hit/Stand only
+    phase2_end: int = 5_000_000  # + Double Down
+    phase3_end: int = 10_000_000  # + Split/Surrender
+
+    # PPO config per phase (inherits from PPOConfig)
+    ppo_config: PPOConfig = field(default_factory=PPOConfig)
