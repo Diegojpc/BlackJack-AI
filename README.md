@@ -44,7 +44,7 @@ BlackJack-AI/
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/BlackJack-AI.git
+git clone https://github.com/Diegojpc/BlackJack-AI.git
 cd BlackJack-AI
 
 # Install dependencies
