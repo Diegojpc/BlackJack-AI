@@ -87,6 +87,20 @@ play:
 app:
 	uv run streamlit run app.py
 
+# Export a self-contained model for sharing — run once after training
+# Output: inference/model.pt (no project dependencies, safe to share)
+export-model:
+	uv run python -c "\
+import torch, pathlib; \
+p = pathlib.Path('models'); \
+candidates = [p/'dueling_dqn_final.pt', *sorted(p.glob('dueling_dqn_step*.pt'), reverse=True)]; \
+src = next(f for f in candidates if f.exists()); \
+ckpt = torch.load(src, map_location='cpu', weights_only=False); \
+cfg = ckpt.get('config'); \
+torch.save({'weights': ckpt['online_net_state_dict'], 'hidden_dims': list(cfg.hidden_dims), 'input_dim': cfg.input_dim, 'output_dim': cfg.output_dim}, 'inference/model.pt'); \
+print(f'Exported {src.name} -> inference/model.pt') \
+"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Quick Smoke Test (fast training for CI/CD)
 # ──────────────────────────────────────────────────────────────────────────────
